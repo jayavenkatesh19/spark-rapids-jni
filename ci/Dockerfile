@@ -23,10 +23,25 @@
 ARG CUDA_VERSION=12.9.1
 ARG OS_RELEASE=8
 ARG TARGETPLATFORM=linux/amd64
+ARG BUILDPLATFORM=linux/amd64
+ARG SYFT_VER=1.32.0
+
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS syft-base
+ARG BUILDPLATFORM
+ARG SYFT_VER
+RUN apk add --no-cache curl tar ca-certificates \
+ && case "$BUILDPLATFORM" in \
+      linux/amd64) SYFT_ARCH="linux_amd64" ;; \
+      linux/arm64) SYFT_ARCH="linux_arm64" ;; \
+      *) echo "Unsupported BUILDPLATFORM: ${BUILDPLATFORM}" && exit 1 ;; \
+    esac \
+ && curl -sSfL "https://github.com/anchore/syft/releases/download/v${SYFT_VER}/syft_${SYFT_VER}_${SYFT_ARCH}.tar.gz" \
+    | tar -xz -C /usr/local/bin syft \
+ && chmod +x /usr/local/bin/syft
 
 # multi-platform build with: docker buildx build --platform linux/arm64,linux/amd64 <ARGS> on either amd64 or arm64 host
 # check available official arm-based docker images at https://hub.docker.com/r/nvidia/cuda/tags (OS/ARCH)
-FROM --platform=$TARGETPLATFORM nvidia/cuda:$CUDA_VERSION-devel-rockylinux$OS_RELEASE
+FROM --platform=$TARGETPLATFORM nvidia/cuda:$CUDA_VERSION-devel-rockylinux$OS_RELEASE AS base-build
 
 # If DEV_BUILD is ON, the gcc-toolset will be enabled by default for bash shell
 ARG DEV_BUILD=OFF
@@ -93,3 +108,14 @@ RUN cd /usr/local && wget --quiet https://archives.boost.io/release/1.79.0/sourc
 
 # disable cuda container constraints to allow running w/ elder drivers on data-center GPUs
 ENV NVIDIA_DISABLE_REQUIRE="true"
+
+FROM syft-base AS sbom
+RUN --mount=type=bind,from=base-build,source=/,target=/rootfs,ro \
+    mkdir -p /out && \
+    syft scan \
+      --scope all-layers \
+      --output cyclonedx-json@1.6=/out/sbom.json \
+      dir:/rootfs
+
+FROM base-build
+COPY --from=sbom /out/sbom.json /sbom/sbom.json
