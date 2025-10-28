@@ -114,6 +114,7 @@ RUN --mount=type=bind,from=base-build,source=/,target=/rootfs,ro \
     mkdir -p /out && \
     syft scan \
       --scope all-layers \
+      --source-name "ci-spark-rapids-jni" \
       --output cyclonedx-json@1.6=/out/sbom.json \
       dir:/rootfs
 
